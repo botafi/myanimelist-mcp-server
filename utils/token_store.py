@@ -54,9 +54,10 @@ class TokenStore:
     def load(self) -> StoredTokens | None:
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
+            refresh_token = data.get("refresh_token")
             return StoredTokens(
                 access_token=str(data["access_token"]),
-                refresh_token=data.get("refresh_token"),
+                refresh_token=str(refresh_token) if refresh_token else None,
                 expires_at=float(data["expires_at"]),
                 token_type=str(data.get("token_type", "Bearer")),
             )
@@ -71,11 +72,14 @@ class TokenStore:
             pass
 
         tmp_path = self.path.with_suffix(self.path.suffix + ".tmp")
-        tmp_path.write_text(json.dumps(asdict(tokens), indent=2), encoding="utf-8")
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        fd = os.open(tmp_path, flags, stat.S_IRUSR | stat.S_IWUSR)
         try:
-            os.chmod(tmp_path, stat.S_IRUSR | stat.S_IWUSR)
-        except PermissionError:
-            pass
+            with os.fdopen(fd, "w", encoding="utf-8") as token_file:
+                token_file.write(json.dumps(asdict(tokens), indent=2))
+        except Exception:
+            os.close(fd)
+            raise
         tmp_path.replace(self.path)
         try:
             os.chmod(self.path, stat.S_IRUSR | stat.S_IWUSR)

@@ -34,6 +34,19 @@ def test_token_store_returns_none_for_missing_or_invalid_file(tmp_path: Path):
     assert TokenStore(invalid).load() is None
 
 
+def test_token_store_normalizes_non_string_refresh_token(tmp_path: Path):
+    path = tmp_path / "mal_tokens.json"
+    path.write_text(
+        json.dumps({"access_token": "access", "refresh_token": 123, "expires_at": time.time() + 3600}),
+        encoding="utf-8",
+    )
+
+    tokens = TokenStore(path).load()
+
+    assert tokens is not None
+    assert tokens.refresh_token == "123"
+
+
 def test_token_store_can_clear_tokens(tmp_path: Path):
     path = tmp_path / "mal_tokens.json"
     store = TokenStore(path)
@@ -43,6 +56,21 @@ def test_token_store_can_clear_tokens(tmp_path: Path):
 
     assert not path.exists()
     assert store.load() is None
+
+
+def test_token_store_temp_file_is_created_private(monkeypatch, tmp_path: Path):
+    observed_modes: list[int] = []
+    real_open = os.open
+
+    def recording_open(path, flags, mode=0o777, *args, **kwargs):
+        observed_modes.append(mode)
+        return real_open(path, flags, mode, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", recording_open)
+
+    TokenStore(tmp_path / "mal_tokens.json").save(StoredTokens("access", "refresh", time.time() + 3600))
+
+    assert 0o600 in observed_modes
 
 
 def test_token_store_default_path_uses_hermes_home(monkeypatch, tmp_path: Path):

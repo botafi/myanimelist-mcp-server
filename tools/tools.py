@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Annotated, List, Optional
+from urllib.parse import quote
 
 import httpx
 from dotenv import load_dotenv
@@ -15,9 +16,20 @@ from utils.schemas import *
 load_dotenv()
 
 
+def anime_calendar_ical_url(username: str) -> str:
+    encoded_username = quote(username.strip(), safe="")
+    return f"https://api.anime-calendar.com/v3/ical/myanimelist/{encoded_username}"
+
+
+def normalize_episode_window(hours: int) -> int:
+    return max(1, min(int(hours), 24 * 14))
+
+
 def register_tools(mcp: FastMCP):
+    mal_client = MALClient()
+
     def client() -> MALClient:
-        return MALClient()
+        return mal_client
 
     async def token() -> str:
         access_token = await get_mal_access_token()
@@ -238,7 +250,8 @@ def register_tools(mcp: FastMCP):
     async def get_upcoming_anime_episodes(username: str = "botafi", hours: int = 36) -> dict:
         """Fetch upcoming episode releases from anime-calendar.com iCal for a MAL username."""
         try:
-            url = f"https://api.anime-calendar.com/v3/ical/myanimelist/{username}"
+            hours = normalize_episode_window(hours)
+            url = anime_calendar_ical_url(username)
             async with httpx.AsyncClient(timeout=30) as calendar_client:
                 response = await calendar_client.get(url)
                 response.raise_for_status()

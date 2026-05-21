@@ -33,6 +33,7 @@ MAL_CLIENT_ID=your_client_id
 MAL_CLIENT_SECRET=your_client_secret
 # Optional; defaults shown:
 MAL_REDIRECT_URI=http://localhost:8080/callback
+MAL_CALLBACK_HOST=127.0.0.1
 MAL_CALLBACK_PORT=8080
 MAL_RATE_LIMIT_DELAY=0.35
 # Optional token path. Default: $HERMES_HOME/secrets/mal_tokens.json, or ~/.hermes/secrets/mal_tokens.json
@@ -48,6 +49,8 @@ uv run main.py
 ```
 
 The first authenticated tool call opens the MAL OAuth URL and starts a one-shot callback server on `localhost:8080`. After authorization, tokens are stored locally and refreshed automatically.
+
+`MAL_CALLBACK_HOST` defaults to `127.0.0.1` for safety. If the MCP server runs inside Docker and the callback must be reached through a published Docker/Tailscale port, set `MAL_CALLBACK_HOST=0.0.0.0` and make sure `MAL_REDIRECT_URI` exactly matches a redirect URL registered in the MyAnimeList app settings.
 
 ## Hermes MCP setup
 
