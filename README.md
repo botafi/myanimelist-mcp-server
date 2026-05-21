@@ -35,6 +35,7 @@ MAL_CLIENT_SECRET=your_client_secret
 MAL_REDIRECT_URI=http://localhost:8080/callback
 MAL_CALLBACK_HOST=127.0.0.1
 MAL_CALLBACK_PORT=8080
+MAL_CALLBACK_TIMEOUT_SECONDS=300
 MAL_RATE_LIMIT_DELAY=0.35
 # Optional token path. Default: $HERMES_HOME/secrets/mal_tokens.json, or ~/.hermes/secrets/mal_tokens.json
 MAL_TOKEN_STORAGE_PATH=/opt/data/.hermes/secrets/mal_tokens.json

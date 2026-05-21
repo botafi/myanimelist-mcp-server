@@ -24,6 +24,7 @@ _expires_at: Optional[float] = None
 REDIRECT_URI = os.getenv("MAL_REDIRECT_URI", "http://localhost:8080/callback")
 CALLBACK_HOST = os.getenv("MAL_CALLBACK_HOST", "127.0.0.1")
 CALLBACK_PORT = int(os.getenv("MAL_CALLBACK_PORT", "8080"))
+CALLBACK_TIMEOUT_SECONDS = int(os.getenv("MAL_CALLBACK_TIMEOUT_SECONDS", "300"))
 CALLBACK_CODE = None
 CALLBACK_STATE = None
 TOKEN_STORE = TokenStore()
@@ -86,8 +87,11 @@ async def capture_authorization_code(expected_state: str) -> str:
     socketserver.TCPServer.allow_reuse_address = True
     try:
         with socketserver.TCPServer((CALLBACK_HOST, CALLBACK_PORT), CallbackHandler) as httpd:
+            httpd.timeout = 5
             print(f"HTTP server started on {REDIRECT_URI}. Waiting for authorization code...")
-            httpd.handle_request()
+            deadline = time.monotonic() + CALLBACK_TIMEOUT_SECONDS
+            while not CALLBACK_CODE and time.monotonic() < deadline:
+                httpd.handle_request()
     except OSError as e:
         raise ValueError(f"Error starting OAuth callback server: {e}") from e
     if not CALLBACK_CODE:
