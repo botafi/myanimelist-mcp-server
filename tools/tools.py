@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field, ValidationError
 
-from utils.auth import get_auth_status, get_mal_access_token, revoke_auth
+from utils.auth import get_auth_status, get_mal_access_token, login_initiate, login_status, revoke_auth
 from utils.episodes import upcoming_events_digest
 from utils.mal_client import MALClient, api_error_payload, build_fields, clamp_limit
 from utils.schemas import *
@@ -138,6 +138,16 @@ def register_tools(mcp: FastMCP):
     async def mal_auth_revoke() -> dict:
         """Clear locally stored MyAnimeList OAuth tokens."""
         return revoke_auth()
+
+    @mcp.tool()
+    async def mal_auth_login() -> dict:
+        """Start a non-blocking MyAnimeList OAuth login and return the authorization URL."""
+        return login_initiate()
+
+    @mcp.tool()
+    async def mal_auth_login_status() -> dict:
+        """Check whether a MyAnimeList OAuth login is pending, completed, or not authenticated."""
+        return await login_status()
 
     @mcp.tool()
     async def get_suggested_anime(limit: int = 10, offset: int = 0) -> dict:

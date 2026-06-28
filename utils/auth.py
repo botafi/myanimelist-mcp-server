@@ -1,205 +1,326 @@
 from __future__ import annotations
 
+import asyncio
+import base64
+import hashlib
 import http.server
+import logging
 import os
 import secrets
 import socketserver
 import time
 import urllib.parse
-import webbrowser
-from typing import Dict, Optional
+from pathlib import Path
+from typing import Any
 
 import httpx
-from dotenv import load_dotenv
 
-from utils.mal_client import safe_error
 from utils.token_store import StoredTokens, TokenStore
 
-load_dotenv()
+LOGGER = logging.getLogger(__name__)
 
-_access_token: Optional[str] = None
-_refresh_token: Optional[str] = None
-_expires_at: Optional[float] = None
-
+CLIENT_ID = os.getenv("MAL_CLIENT_ID")
+CLIENT_SECRET = os.getenv("MAL_CLIENT_SECRET")
 REDIRECT_URI = os.getenv("MAL_REDIRECT_URI", "http://localhost:8080/callback")
 CALLBACK_HOST = os.getenv("MAL_CALLBACK_HOST", "127.0.0.1")
 CALLBACK_PORT = int(os.getenv("MAL_CALLBACK_PORT", "8080"))
-CALLBACK_TIMEOUT_SECONDS = int(os.getenv("MAL_CALLBACK_TIMEOUT_SECONDS", "300"))
-CALLBACK_CODE = None
-CALLBACK_STATE = None
-TOKEN_STORE = TokenStore()
+CALLBACK_TIMEOUT_SECONDS = float(os.getenv("MAL_CALLBACK_TIMEOUT_SECONDS", "300"))
+
+# Public globals used by the callback server and by tests that monkeypatch it.
+CALLBACK_CODE: str | None = None
+CALLBACK_STATE: str | None = None
+
+_MAL_OAUTH_AUTH_URL = "https://myanimelist.net/v1/oauth2/authorize"
+_MAL_OAUTH_TOKEN_URL = "https://myanimelist.net/v1/oauth2/token"
+
+# In-memory login state for the non-blocking OAuth flow.
+_login_state: dict[str, Any] = {}
 
 
-def _client_id() -> str:
-    value = os.getenv("MAL_CLIENT_ID")
-    if not value:
-        raise ValueError("MAL_CLIENT_ID is required. Create an app at https://myanimelist.net/apiconfig and set it in the environment.")
-    return value
+def _token_store() -> TokenStore:
+    return TokenStore()
 
 
-def _client_secret() -> str:
-    value = os.getenv("MAL_CLIENT_SECRET")
-    if not value:
-        raise ValueError("MAL_CLIENT_SECRET is required for MyAnimeList OAuth token exchange/refresh.")
-    return value
+def _require_client_id() -> str:
+    client_id = CLIENT_ID
+    if not client_id:
+        raise ValueError("MAL_CLIENT_ID is not configured")
+    return client_id
 
 
-def get_new_code_verifier() -> str:
-    return secrets.token_urlsafe(64)
+def _generate_pkce() -> tuple[str, str]:
+    """Return (code_verifier, code_challenge)."""
+    verifier = base64.urlsafe_b64encode(os.urandom(32)).rstrip(b"=").decode("ascii")
+    challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(verifier.encode("ascii")).digest()
+    ).rstrip(b"=").decode("ascii")
+    return verifier, challenge
 
 
-async def get_authorization_url() -> tuple[str, str, str]:
-    code_verifier = get_new_code_verifier()
-    code_challenge = code_verifier  # MAL currently supports plain PKCE.
-    state = secrets.token_urlsafe(16)
+def _authorization_url(state: str, code_challenge: str) -> str:
     params = {
-        "client_id": _client_id(),
         "response_type": "code",
-        "code_challenge": code_challenge,
-        "code_challenge_method": "plain",
-        "redirect_uri": REDIRECT_URI,
+        "client_id": _require_client_id(),
         "state": state,
+        "code_challenge": code_challenge,
+        "code_challenge_method": "S256",
+        "redirect_uri": REDIRECT_URI,
     }
-    url = "https://myanimelist.net/v1/oauth2/authorize?" + urllib.parse.urlencode(params)
-    return url, code_verifier, state
+    return f"{_MAL_OAUTH_AUTH_URL}?{urllib.parse.urlencode(params)}"
 
 
-class CallbackHandler(http.server.SimpleHTTPRequestHandler):
-    def log_message(self, format: str, *args) -> None:  # noqa: A002
-        return
+class _CallbackHandler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, fmt: str, *args: Any) -> None:
+        # Reduce request logging noise; sensitive query params are never logged.
+        pass
 
-    def do_GET(self):
-        global CALLBACK_CODE, CALLBACK_STATE
-        query = urllib.parse.urlparse(self.path).query
-        query_components = urllib.parse.parse_qs(query)
-        CALLBACK_CODE = query_components.get("code", [None])[0]
-        CALLBACK_STATE = query_components.get("state", [None])[0]
-        self.send_response(200)
-        self.send_header("Content-type", "text/html")
+    def _send_html(self, status: int, body: str) -> None:
+        encoded = body.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(encoded)))
         self.end_headers()
-        self.wfile.write(b"Authorization code received. You can close this window and return to Hermes.")
+        self.wfile.write(encoded)
+
+    def do_GET(self) -> None:  # noqa: N802
+        global CALLBACK_CODE, CALLBACK_STATE
+
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path != "/callback":
+            self._send_html(404, "<h1>Not found</h1>")
+            return
+
+        qs = urllib.parse.parse_qs(parsed.query)
+        code = qs.get("code", [None])[0]
+        state = qs.get("state", [None])[0]
+        error = qs.get("error", [None])[0]
+
+        if error:
+            self._send_html(400, f"<h1>Authorization error</h1><p>{error}</p>")
+            return
+
+        if code and state:
+            CALLBACK_CODE = code
+            CALLBACK_STATE = state
+            self._send_html(
+                200,
+                "<h1>Authorization received</h1><p>You can close this window.</p>",
+            )
+            return
+
+        # Empty probe request (e.g., from a browser preflight or health check).
+        self._send_html(200, "<h1>Waiting for authorization…</h1>")
 
 
-async def capture_authorization_code(expected_state: str) -> str:
+def capture_authorization_code(expected_state: str) -> str | None:
+    """Run a one-shot HTTP callback server until the expected state arrives or timeout."""
     global CALLBACK_CODE, CALLBACK_STATE
     CALLBACK_CODE = None
     CALLBACK_STATE = None
-    socketserver.TCPServer.allow_reuse_address = True
-    try:
-        with socketserver.TCPServer((CALLBACK_HOST, CALLBACK_PORT), CallbackHandler) as httpd:
-            httpd.timeout = 5
-            print(f"HTTP server started on {REDIRECT_URI}. Waiting for authorization code...")
-            deadline = time.monotonic() + CALLBACK_TIMEOUT_SECONDS
-            while not CALLBACK_CODE and time.monotonic() < deadline:
-                httpd.handle_request()
-    except OSError as e:
-        raise ValueError(f"Error starting OAuth callback server: {e}") from e
-    if not CALLBACK_CODE:
-        raise ValueError("Authorization code was not received")
-    if CALLBACK_STATE != expected_state:
-        raise ValueError("OAuth state mismatch")
-    return CALLBACK_CODE
+
+    server_address = (CALLBACK_HOST, CALLBACK_PORT)
+    deadline = time.monotonic() + CALLBACK_TIMEOUT_SECONDS
+
+    with socketserver.TCPServer(server_address, _CallbackHandler) as server:
+        server.timeout = 1.0
+        while time.monotonic() < deadline:
+            server.handle_request()
+            if CALLBACK_CODE and CALLBACK_STATE == expected_state:
+                return CALLBACK_CODE
+            if CALLBACK_CODE and CALLBACK_STATE != expected_state:
+                LOGGER.warning("OAuth state mismatch; continuing to wait")
+                CALLBACK_CODE = None
+                CALLBACK_STATE = None
+        return None
 
 
-async def exchange_code_for_token(code: str, code_verifier: str) -> Dict:
-    url = "https://myanimelist.net/v1/oauth2/token"
-    payload = {
-        "client_id": _client_id(),
-        "client_secret": _client_secret(),
+async def _exchange_code_for_token(code: str, code_verifier: str) -> StoredTokens:
+    """Exchange an authorization code for tokens."""
+    data = {
         "grant_type": "authorization_code",
+        "client_id": _require_client_id(),
+        "client_secret": CLIENT_SECRET or "",
         "code": code,
-        "redirect_uri": REDIRECT_URI,
         "code_verifier": code_verifier,
+        "redirect_uri": REDIRECT_URI,
     }
     async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.post(url, data=payload, headers={"Content-Type": "application/x-www-form-urlencoded"})
-        try:
-            response.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            raise httpx.HTTPStatusError(
-                safe_error(f"Error getting token: {e.response.status_code} {e.response.reason_phrase}"),
-                request=e.request,
-                response=e.response,
-            ) from e
-        return response.json()
+        response = await client.post(_MAL_OAUTH_TOKEN_URL, data=data)
+        response.raise_for_status()
+        payload = response.json()
+    return StoredTokens.from_token_response(payload)
 
 
-async def refresh_access_token(refresh_token: str) -> Dict:
-    url = "https://myanimelist.net/v1/oauth2/token"
-    payload = {
-        "client_id": _client_id(),
-        "client_secret": _client_secret(),
+async def _refresh_tokens(refresh_token: str) -> StoredTokens:
+    data = {
         "grant_type": "refresh_token",
+        "client_id": _require_client_id(),
+        "client_secret": CLIENT_SECRET or "",
         "refresh_token": refresh_token,
     }
+    existing = _token_store().load()
     async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.post(url, data=payload, headers={"Content-Type": "application/x-www-form-urlencoded"})
-        try:
-            response.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            raise httpx.HTTPStatusError(
-                safe_error(f"Error refreshing token: {e.response.status_code} {e.response.reason_phrase}"),
-                request=e.request,
-                response=e.response,
-            ) from e
-        return response.json()
+        response = await client.post(_MAL_OAUTH_TOKEN_URL, data=data)
+        response.raise_for_status()
+        payload = response.json()
+    tokens = StoredTokens.from_token_response(payload, existing_refresh_token=refresh_token)
+    _token_store().save(tokens)
+    return tokens
 
 
-def _set_memory(tokens: StoredTokens) -> None:
-    global _access_token, _refresh_token, _expires_at
-    _access_token = tokens.access_token
-    _refresh_token = tokens.refresh_token
-    _expires_at = tokens.expires_at
+def get_auth_status() -> dict[str, Any]:
+    """Return non-sensitive auth status information."""
+    store = _token_store()
+    tokens = store.load()
+    if tokens is None:
+        return {
+            "authenticated": False,
+            "provider": "myanimelist",
+            "reason": "no_stored_tokens",
+            "token_path": str(store.path),
+        }
+    return {
+        "authenticated": tokens.is_valid,
+        "provider": "myanimelist",
+        "expires_at": tokens.expires_at,
+        "token_path": str(store.path),
+    }
+
+
+def revoke_auth() -> dict[str, Any]:
+    """Clear stored tokens."""
+    store = _token_store()
+    store.clear()
+    _login_state.clear()
+    return {"authenticated": False, "provider": "myanimelist", "message": "Tokens revoked"}
 
 
 async def get_mal_access_token() -> str:
-    current_time = time.time()
-    if _access_token and _expires_at and current_time < _expires_at - 60:
-        return _access_token
+    """Return a valid access token, refreshing if possible.
 
-    stored = TOKEN_STORE.load()
-    if stored and stored.is_valid:
-        _set_memory(stored)
-        return stored.access_token
+    Raises RuntimeError with a clear message when no token exists and refresh is not possible.
+    """
+    store = _token_store()
+    tokens = store.load()
 
-    refresh_token = _refresh_token or (stored.refresh_token if stored else None)
-    if refresh_token:
+    if tokens is not None and tokens.is_valid:
+        return tokens.access_token
+
+    if tokens is not None and tokens.refresh_token:
         try:
-            data = await refresh_access_token(refresh_token)
-            refreshed = StoredTokens.from_token_response(data, now=current_time, existing_refresh_token=refresh_token)
-            TOKEN_STORE.save(refreshed)
-            _set_memory(refreshed)
+            refreshed = await _refresh_tokens(tokens.refresh_token)
             return refreshed.access_token
-        except httpx.HTTPStatusError:
-            print("Couldn't refresh the MAL token. Starting a new OAuth flow...")
+        except Exception as exc:
+            LOGGER.warning("Failed to refresh MAL token: %s", exc)
 
-    auth_url, code_verifier, state = await get_authorization_url()
-    print(f"Open this URL in your browser to authorize MyAnimeList access:\n{auth_url}")
-    webbrowser.open(auth_url)
-    code = await capture_authorization_code(state)
-    data = await exchange_code_for_token(code, code_verifier)
-    tokens = StoredTokens.from_token_response(data, now=current_time)
-    TOKEN_STORE.save(tokens)
-    _set_memory(tokens)
-    return tokens.access_token
+    raise RuntimeError(
+        "No valid MyAnimeList access token available. "
+        "Call the 'mal_auth_login' tool first to start OAuth authorization."
+    )
 
 
-def get_auth_status() -> dict:
-    stored = TOKEN_STORE.load()
-    if not stored:
-        return {"authenticated": False, "token_path": str(TOKEN_STORE.path)}
+async def _watch_login(state: str, verifier: str) -> None:
+    """Background task: wait for callback, exchange code, save tokens."""
+    try:
+        code = await asyncio.to_thread(capture_authorization_code, state)
+        if code is None:
+            _login_state["error"] = "Authorization timed out or no callback received"
+            return
+        tokens = await _exchange_code_for_token(code, verifier)
+        _token_store().save(tokens)
+        _login_state["completed_at"] = time.time()
+    except Exception as exc:
+        LOGGER.exception("MAL login failed")
+        _login_state["error"] = f"Login failed: {exc}"
+
+
+def login_initiate() -> dict[str, Any]:
+    """Start a non-blocking MyAnimeList OAuth login and return the authorization URL."""
+    store = _token_store()
+    tokens = store.load()
+    if tokens is not None and tokens.is_valid:
+        return {
+            "status": "already_authenticated",
+            "provider": "myanimelist",
+            "authorization_url": None,
+            "redirect_uri": REDIRECT_URI,
+        }
+
+    _require_client_id()
+
+    existing_task = _login_state.get("task")
+    if existing_task is not None and not existing_task.done():
+        return {
+            "status": "pending",
+            "provider": "myanimelist",
+            "authorization_url": _login_state.get("authorization_url"),
+            "redirect_uri": REDIRECT_URI,
+        }
+
+    state = secrets.token_urlsafe(16)
+    verifier, challenge = _generate_pkce()
+    auth_url = _authorization_url(state, challenge)
+
+    _login_state.clear()
+    _login_state.update(
+        {
+            "state": state,
+            "verifier": verifier,
+            "authorization_url": auth_url,
+            "redirect_uri": REDIRECT_URI,
+        }
+    )
+
+    # Start the callback watcher as a background asyncio task.
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    task = loop.create_task(_watch_login(state, verifier))
+    _login_state["task"] = task
+
     return {
-        "authenticated": stored.is_valid,
-        "expires_at": stored.expires_at,
-        "has_refresh_token": bool(stored.refresh_token),
-        "token_path": str(TOKEN_STORE.path),
+        "status": "pending",
+        "provider": "myanimelist",
+        "authorization_url": auth_url,
+        "redirect_uri": REDIRECT_URI,
     }
 
 
-def revoke_auth() -> dict:
-    global _access_token, _refresh_token, _expires_at
-    TOKEN_STORE.clear()
-    _access_token = None
-    _refresh_token = None
-    _expires_at = None
-    return {"authenticated": False, "message": "Stored MyAnimeList tokens cleared"}
+async def login_status() -> dict[str, Any]:
+    """Check whether a login is pending, completed, or not authenticated."""
+    tokens = _token_store().load()
+    if tokens is not None and tokens.is_valid:
+        return {
+            "authenticated": True,
+            "status": "authenticated",
+            "provider": "myanimelist",
+            "expires_at": tokens.expires_at,
+        }
+
+    task = _login_state.get("task")
+    error = _login_state.get("error")
+
+    if task is not None and not task.done():
+        return {
+            "authenticated": False,
+            "status": "pending",
+            "provider": "myanimelist",
+            "authorization_url": _login_state.get("authorization_url"),
+            "redirect_uri": _login_state.get("redirect_uri"),
+        }
+
+    if error:
+        return {
+            "authenticated": False,
+            "status": "failed",
+            "provider": "myanimelist",
+            "error": error,
+        }
+
+    return {
+        "authenticated": False,
+        "status": "not_authenticated",
+        "provider": "myanimelist",
+    }
