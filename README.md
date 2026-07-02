@@ -8,7 +8,7 @@ MCP server for interacting with the MyAnimeList API from Hermes, Claude Desktop,
 - Refresh-token persistence so unattended jobs do not need to re-auth every run.
 - Safer error messages that avoid returning raw API response bodies or bearer tokens.
 - Small MyAnimeList API client wrapper with request timeout and basic request pacing.
-- Auth helper tools: `mal_auth_status`, `mal_auth_revoke`.
+- Auth helper tools: `mal_auth_login`, `mal_auth_login_status`, `mal_auth_status`, `mal_auth_revoke`.
 - Episode schedule helper: `get_upcoming_anime_episodes`, backed by `https://api.anime-calendar.com/v3/ical/myanimelist/<username>`.
 - Tests for token storage, API helper behavior, and iCal episode parsing.
 
@@ -36,6 +36,7 @@ MAL_REDIRECT_URI=http://localhost:8080/callback
 MAL_CALLBACK_HOST=127.0.0.1
 MAL_CALLBACK_PORT=8080
 MAL_CALLBACK_TIMEOUT_SECONDS=300
+MAL_PKCE_METHOD=plain
 MAL_RATE_LIMIT_DELAY=0.35
 # Optional token path. Default: $HERMES_HOME/secrets/mal_tokens.json, or ~/.hermes/secrets/mal_tokens.json
 MAL_TOKEN_STORAGE_PATH=/opt/data/.hermes/secrets/mal_tokens.json
@@ -49,7 +50,9 @@ Secrets must stay local. Do not commit `.env` or token files.
 uv run main.py
 ```
 
-The first authenticated tool call opens the MAL OAuth URL and starts a one-shot callback server on `localhost:8080`. After authorization, tokens are stored locally and refreshed automatically.
+Run the `mal_auth_login` tool to start a one-shot callback server and receive a MyAnimeList OAuth URL. Open that URL in a browser you can access, approve the app, then run `mal_auth_login_status` until it reports `authenticated`. After authorization, tokens are stored locally and refreshed automatically.
+
+MyAnimeList OAuth uses PKCE. This server defaults `MAL_PKCE_METHOD` to `plain`, which matches MyAnimeList compatibility. Set it to `S256` only if your MyAnimeList app/API behavior explicitly supports it.
 
 `MAL_CALLBACK_HOST` defaults to `127.0.0.1` for safety. If the MCP server runs inside Docker and the callback must be reached through a published Docker/Tailscale port, set `MAL_CALLBACK_HOST=0.0.0.0` and make sure `MAL_REDIRECT_URI` exactly matches a redirect URL registered in the MyAnimeList app settings.
 
@@ -89,6 +92,8 @@ If Hermes is managed via Docker, persist this repository and the token path as m
 ### User/auth
 
 - `get_user_profile`: **auth required**; fetch current user profile.
+- `mal_auth_login`: start OAuth and return an authorization URL for headless/server setups.
+- `mal_auth_login_status`: check whether the OAuth callback completed and tokens were stored.
 - `mal_auth_status`: inspect local OAuth token status without exposing token values.
 - `mal_auth_revoke`: delete locally stored OAuth tokens.
 
