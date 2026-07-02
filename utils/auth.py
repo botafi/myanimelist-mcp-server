@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import html
 import http.server
 import logging
 import os
@@ -10,12 +11,14 @@ import secrets
 import socketserver
 import time
 import urllib.parse
-from pathlib import Path
 from typing import Any
 
 import httpx
+from dotenv import load_dotenv
 
 from utils.token_store import StoredTokens, TokenStore
+
+load_dotenv()
 
 LOGGER = logging.getLogger(__name__)
 
@@ -25,6 +28,7 @@ REDIRECT_URI = os.getenv("MAL_REDIRECT_URI", "http://localhost:8080/callback")
 CALLBACK_HOST = os.getenv("MAL_CALLBACK_HOST", "127.0.0.1")
 CALLBACK_PORT = int(os.getenv("MAL_CALLBACK_PORT", "8080"))
 CALLBACK_TIMEOUT_SECONDS = float(os.getenv("MAL_CALLBACK_TIMEOUT_SECONDS", "300"))
+PKCE_METHOD = os.getenv("MAL_PKCE_METHOD", "plain").lower()
 
 # Public globals used by the callback server and by tests that monkeypatch it.
 CALLBACK_CODE: str | None = None
@@ -42,28 +46,46 @@ def _token_store() -> TokenStore:
 
 
 def _require_client_id() -> str:
-    client_id = CLIENT_ID
+    client_id = os.getenv("MAL_CLIENT_ID") or CLIENT_ID
     if not client_id:
         raise ValueError("MAL_CLIENT_ID is not configured")
     return client_id
 
 
-def _generate_pkce() -> tuple[str, str]:
-    """Return (code_verifier, code_challenge)."""
-    verifier = base64.urlsafe_b64encode(os.urandom(32)).rstrip(b"=").decode("ascii")
+def _require_client_secret() -> str:
+    client_secret = os.getenv("MAL_CLIENT_SECRET") or CLIENT_SECRET
+    if not client_secret:
+        raise ValueError("MAL_CLIENT_SECRET is not configured")
+    return client_secret
+
+
+def _pkce_method() -> str:
+    method = (os.getenv("MAL_PKCE_METHOD") or PKCE_METHOD).lower()
+    if method not in {"plain", "s256"}:
+        raise ValueError("MAL_PKCE_METHOD must be either 'plain' or 'S256'")
+    return method
+
+
+def _generate_pkce() -> tuple[str, str, str]:
+    """Return (code_verifier, code_challenge, code_challenge_method)."""
+    verifier = secrets.token_urlsafe(64)
+    method = _pkce_method()
+    if method == "plain":
+        return verifier, verifier, "plain"
+
     challenge = base64.urlsafe_b64encode(
         hashlib.sha256(verifier.encode("ascii")).digest()
     ).rstrip(b"=").decode("ascii")
-    return verifier, challenge
+    return verifier, challenge, "S256"
 
 
-def _authorization_url(state: str, code_challenge: str) -> str:
+def _authorization_url(state: str, code_challenge: str, code_challenge_method: str) -> str:
     params = {
         "response_type": "code",
         "client_id": _require_client_id(),
         "state": state,
         "code_challenge": code_challenge,
-        "code_challenge_method": "S256",
+        "code_challenge_method": code_challenge_method,
         "redirect_uri": REDIRECT_URI,
     }
     return f"{_MAL_OAUTH_AUTH_URL}?{urllib.parse.urlencode(params)}"
@@ -96,7 +118,7 @@ class _CallbackHandler(http.server.BaseHTTPRequestHandler):
         error = qs.get("error", [None])[0]
 
         if error:
-            self._send_html(400, f"<h1>Authorization error</h1><p>{error}</p>")
+            self._send_html(400, f"<h1>Authorization error</h1><p>{html.escape(error)}</p>")
             return
 
         if code and state:
@@ -120,8 +142,10 @@ def capture_authorization_code(expected_state: str) -> str | None:
 
     server_address = (CALLBACK_HOST, CALLBACK_PORT)
     deadline = time.monotonic() + CALLBACK_TIMEOUT_SECONDS
+    server_cls = socketserver.TCPServer
+    server_cls.allow_reuse_address = True
 
-    with socketserver.TCPServer(server_address, _CallbackHandler) as server:
+    with server_cls(server_address, _CallbackHandler) as server:
         server.timeout = 1.0
         while time.monotonic() < deadline:
             server.handle_request()
@@ -139,7 +163,7 @@ async def _exchange_code_for_token(code: str, code_verifier: str) -> StoredToken
     data = {
         "grant_type": "authorization_code",
         "client_id": _require_client_id(),
-        "client_secret": CLIENT_SECRET or "",
+        "client_secret": _require_client_secret(),
         "code": code,
         "code_verifier": code_verifier,
         "redirect_uri": REDIRECT_URI,
@@ -155,7 +179,7 @@ async def _refresh_tokens(refresh_token: str) -> StoredTokens:
     data = {
         "grant_type": "refresh_token",
         "client_id": _require_client_id(),
-        "client_secret": CLIENT_SECRET or "",
+        "client_secret": _require_client_secret(),
         "refresh_token": refresh_token,
     }
     existing = _token_store().load()
@@ -247,6 +271,7 @@ def login_initiate() -> dict[str, Any]:
         }
 
     _require_client_id()
+    _require_client_secret()
 
     existing_task = _login_state.get("task")
     if existing_task is not None and not existing_task.done():
@@ -258,14 +283,15 @@ def login_initiate() -> dict[str, Any]:
         }
 
     state = secrets.token_urlsafe(16)
-    verifier, challenge = _generate_pkce()
-    auth_url = _authorization_url(state, challenge)
+    verifier, challenge, challenge_method = _generate_pkce()
+    auth_url = _authorization_url(state, challenge, challenge_method)
 
     _login_state.clear()
     _login_state.update(
         {
             "state": state,
             "verifier": verifier,
+            "code_challenge_method": challenge_method,
             "authorization_url": auth_url,
             "redirect_uri": REDIRECT_URI,
         }
