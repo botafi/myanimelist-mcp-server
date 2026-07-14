@@ -10,7 +10,8 @@ MCP server for interacting with the MyAnimeList API from Hermes, Claude Desktop,
 - Small MyAnimeList API client wrapper with request timeout and basic request pacing.
 - Auth helper tools: `mal_auth_login`, `mal_auth_login_status`, `mal_auth_status`, `mal_auth_revoke`.
 - Episode schedule helper: `get_upcoming_anime_episodes`, backed by `https://api.anime-calendar.com/v3/ical/myanimelist/<username>`.
-- Tests for token storage, API helper behavior, and iCal episode parsing.
+- News RSS helper: `get_mal_news`, backed by `https://myanimelist.net/rss/news.xml`.
+- Tests for token storage, API helper behavior, iCal episode parsing, and RSS news parsing.
 
 ## Requirements
 
@@ -76,6 +77,7 @@ If Hermes is managed via Docker, persist this repository and the token path as m
 - `get_anime_ranking`: fetch anime rankings.
 - `get_seasonal_anime`: fetch anime by year/season.
 - `get_anime_list`: fetch a user's public anime list (status filter optional).
+- `get_my_anime_list`: **auth required**; fetch the authenticated user's anime list.
 - `get_suggested_anime`: **auth required**; fetch recommendations for the authenticated user.
 - `update_myanimelist`: **auth required**; update an anime list entry.
 - `delete_myanimelist_item`: **auth required**; delete an anime list entry.
@@ -86,6 +88,7 @@ If Hermes is managed via Docker, persist this repository and the token path as m
 - `get_manga_details`: fetch manga details by MAL ID.
 - `get_manga_ranking`: fetch manga rankings.
 - `get_manga_list`: fetch a user's public manga list (status filter optional).
+- `get_my_manga_list`: **auth required**; fetch the authenticated user's manga list.
 - `update_mymangalist`: **auth required**; update a manga list entry.
 - `delete_mymangalist_item`: **auth required**; delete a manga list entry.
 
@@ -106,6 +109,10 @@ If Hermes is managed via Docker, persist this repository and the token path as m
 ### Episode schedule
 
 - `get_upcoming_anime_episodes`: fetch upcoming episodes for a MAL username from Anime Calendar iCal and return a digest.
+
+### News
+
+- `get_mal_news`: fetch recent anime/manga news articles from the MyAnimeList RSS feed.
 
 ## Tests
 

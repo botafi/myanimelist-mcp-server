@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import re
 from typing import Annotated, List, Optional
 from urllib.parse import quote
+from xml.etree import ElementTree
 
 import httpx
 from dotenv import load_dotenv
@@ -15,6 +17,11 @@ from utils.schemas import *
 
 load_dotenv()
 
+_MAL_NEWS_RSS_URL = "https://myanimelist.net/rss/news.xml"
+_MAL_NEWS_LIMIT = 20
+_TRACKING_QUERY_RE = re.compile(r"[?&]_location=rss\b")
+_MEDIA_NS = "http://search.yahoo.com/mrss/"
+
 
 def anime_calendar_ical_url(username: str) -> str:
     encoded_username = quote(username.strip(), safe="")
@@ -23,6 +30,50 @@ def anime_calendar_ical_url(username: str) -> str:
 
 def normalize_episode_window(hours: int) -> int:
     return max(1, min(int(hours), 24 * 14))
+
+
+def _clean_news_url(url: str | None) -> str | None:
+    if url is None:
+        return None
+    return _TRACKING_QUERY_RE.sub("", url)
+
+
+def parse_mal_news_rss(xml_text: str, limit: int) -> dict:
+    root = ElementTree.fromstring(xml_text)
+
+    channel = root.find("channel")
+    if channel is None:
+        return {"error": "RSS feed missing channel element"}
+
+    articles: list[dict[str, str | None]] = []
+    for item in channel.findall("item"):
+        if len(articles) >= limit:
+            break
+
+        title_el = item.find("title")
+        link_el = item.find("link")
+        desc_el = item.find("description")
+        pub_el = item.find("pubDate")
+        thumb_el = item.find(f"{{{_MEDIA_NS}}}thumbnail")
+
+        title = title_el.text if title_el is not None and title_el.text else None
+        url = _clean_news_url(link_el.text) if link_el is not None else None
+        description = desc_el.text if desc_el is not None and desc_el.text else None
+        published = pub_el.text if pub_el is not None and pub_el.text else None
+        thumbnail = thumb_el.get("url") if thumb_el is not None else None
+
+        if title is None and url is None:
+            continue
+
+        articles.append({
+            "title": title,
+            "url": url,
+            "description": description,
+            "published": published,
+            "thumbnail": thumbnail,
+        })
+
+    return {"articles": articles}
 
 
 def register_tools(mcp: FastMCP):
@@ -131,6 +182,36 @@ def register_tools(mcp: FastMCP):
             if sort:
                 params["sort"] = sort.value
             return await client().get_public(f"/users/{username}/mangalist", params=params)
+        except Exception as e:
+            return api_error_payload(e)
+
+    @mcp.tool()
+    async def get_my_anime_list(status: Optional[AnimeStatus] = None, sort: Optional[AnimeStatusSort] = None, limit: int = 10, offset: int = 0, fields: Optional[List[str]] = None) -> dict:
+        """Fetch the authenticated user's MyAnimeList anime list."""
+        try:
+            params: dict[str, object] = {"limit": clamp_limit(limit, 1000), "offset": max(0, offset)}
+            if status:
+                params["status"] = status.value
+            if sort:
+                params["sort"] = sort.value
+            if fields:
+                params["fields"] = build_fields(fields, ["id", "title", "main_picture"])
+            return await client().get_authed("/users/@me/animelist", await token(), params=params)
+        except Exception as e:
+            return api_error_payload(e)
+
+    @mcp.tool()
+    async def get_my_manga_list(status: Optional[MangaStatus] = None, sort: Optional[MangaStatusSort] = None, limit: int = 10, offset: int = 0, fields: Optional[List[str]] = None) -> dict:
+        """Fetch the authenticated user's MyAnimeList manga list."""
+        try:
+            params: dict[str, object] = {"limit": clamp_limit(limit, 1000), "offset": max(0, offset)}
+            if status:
+                params["status"] = status.value
+            if sort:
+                params["sort"] = sort.value
+            if fields:
+                params["fields"] = build_fields(fields, ["id", "title", "main_picture"])
+            return await client().get_authed("/users/@me/mangalist", await token(), params=params)
         except Exception as e:
             return api_error_payload(e)
 
@@ -320,5 +401,17 @@ def register_tools(mcp: FastMCP):
                 response = await calendar_client.get(url)
                 response.raise_for_status()
             return {"username": username, "hours": hours, "digest": upcoming_events_digest(response.text, hours=hours)}
+        except Exception as e:
+            return api_error_payload(e)
+
+    @mcp.tool()
+    async def get_mal_news(limit: int = 10) -> dict:
+        """Fetch recent anime/manga news articles from MyAnimeList RSS feed."""
+        try:
+            limit = clamp_limit(limit, _MAL_NEWS_LIMIT)
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.get(_MAL_NEWS_RSS_URL)
+                response.raise_for_status()
+            return parse_mal_news_rss(response.text, limit)
         except Exception as e:
             return api_error_payload(e)

@@ -1,8 +1,9 @@
 import pytest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
+from xml.etree.ElementTree import ParseError
 
-from utils.schemas import AnimeRanking, MangaRanking, Season
-from tools.tools import register_tools, normalize_episode_window, anime_calendar_ical_url
+from utils.schemas import AnimeRanking, AnimeStatus, AnimeStatusSort, MangaRanking, MangaStatus, MangaStatusSort, Season
+from tools.tools import register_tools, normalize_episode_window, anime_calendar_ical_url, parse_mal_news_rss
 
 
 class TestToolRegistration:
@@ -26,6 +27,8 @@ class TestToolRegistration:
         assert "get_manga_details" in names
         assert "get_manga_ranking" in names
         assert "get_manga_list" in names
+        assert "get_my_anime_list" in names
+        assert "get_my_manga_list" in names
         assert "get_forum_boards" in names
         assert "get_forum_topic" in names
         assert "get_forum_topics" in names
@@ -40,7 +43,8 @@ class TestToolRegistration:
         assert "update_myanimelist" in names
         assert "update_mymangalist" in names
         assert "get_upcoming_anime_episodes" in names
-        assert len(names) == 23
+        assert "get_mal_news" in names
+        assert len(names) == 26
 
     def test_get_anime_list_status_is_optional_in_schema(self):
         from mcp.server.fastmcp import FastMCP
@@ -290,3 +294,496 @@ class TestToolRegistration:
 
         params = mock_client.get_public.call_args.kwargs["params"]
         assert "fields" not in params
+
+    def test_get_my_anime_list_endpoint_path(self):
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        with patch("tools.tools.MALClient") as mock_client_cls, patch("tools.tools.get_mal_access_token", new=AsyncMock(return_value="test-token")):
+            mock_client = AsyncMock()
+            mock_client.get_authed = AsyncMock(return_value={"data": []})
+            mock_client_cls.return_value = mock_client
+            register_tools(mcp)
+
+            import asyncio
+            tool = next(t for t in mcp._tool_manager.list_tools() if t.name == "get_my_anime_list")
+            asyncio.run(tool.fn(None, None, 10, 0, None))
+
+            mock_client.get_authed.assert_called_once()
+            assert mock_client.get_authed.call_args.args[0] == "/users/@me/animelist"
+
+    def test_get_my_manga_list_endpoint_path(self):
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        with patch("tools.tools.MALClient") as mock_client_cls, patch("tools.tools.get_mal_access_token", new=AsyncMock(return_value="test-token")):
+            mock_client = AsyncMock()
+            mock_client.get_authed = AsyncMock(return_value={"data": []})
+            mock_client_cls.return_value = mock_client
+            register_tools(mcp)
+
+            import asyncio
+            tool = next(t for t in mcp._tool_manager.list_tools() if t.name == "get_my_manga_list")
+            asyncio.run(tool.fn(None, None, 10, 0, None))
+
+            mock_client.get_authed.assert_called_once()
+            assert mock_client.get_authed.call_args.args[0] == "/users/@me/mangalist"
+
+    def test_get_my_anime_list_uses_authenticated_token(self):
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        with patch("tools.tools.MALClient") as mock_client_cls, patch("tools.tools.get_mal_access_token", new=AsyncMock(return_value="test-token")):
+            mock_client = AsyncMock()
+            mock_client.get_authed = AsyncMock(return_value={"data": []})
+            mock_client_cls.return_value = mock_client
+            register_tools(mcp)
+
+            import asyncio
+            tool = next(t for t in mcp._tool_manager.list_tools() if t.name == "get_my_anime_list")
+            asyncio.run(tool.fn(None, None, 10, 0, None))
+
+            assert mock_client.get_authed.call_args.args[1] == "test-token"
+
+    def test_get_my_manga_list_uses_authenticated_token(self):
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        with patch("tools.tools.MALClient") as mock_client_cls, patch("tools.tools.get_mal_access_token", new=AsyncMock(return_value="test-token")):
+            mock_client = AsyncMock()
+            mock_client.get_authed = AsyncMock(return_value={"data": []})
+            mock_client_cls.return_value = mock_client
+            register_tools(mcp)
+
+            import asyncio
+            tool = next(t for t in mcp._tool_manager.list_tools() if t.name == "get_my_manga_list")
+            asyncio.run(tool.fn(None, None, 10, 0, None))
+
+            assert mock_client.get_authed.call_args.args[1] == "test-token"
+
+    def test_get_my_anime_list_limit_clamped_to_1000(self):
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        with patch("tools.tools.MALClient") as mock_client_cls, patch("tools.tools.get_mal_access_token", new=AsyncMock(return_value="test-token")):
+            mock_client = AsyncMock()
+            mock_client.get_authed = AsyncMock(return_value={"data": []})
+            mock_client_cls.return_value = mock_client
+            register_tools(mcp)
+
+            import asyncio
+            tool = next(t for t in mcp._tool_manager.list_tools() if t.name == "get_my_anime_list")
+            asyncio.run(tool.fn(None, None, 2000, 0, None))
+
+            params = mock_client.get_authed.call_args.kwargs["params"]
+            assert params["limit"] == 1000
+
+    def test_get_my_manga_list_limit_clamped_to_1000(self):
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        with patch("tools.tools.MALClient") as mock_client_cls, patch("tools.tools.get_mal_access_token", new=AsyncMock(return_value="test-token")):
+            mock_client = AsyncMock()
+            mock_client.get_authed = AsyncMock(return_value={"data": []})
+            mock_client_cls.return_value = mock_client
+            register_tools(mcp)
+
+            import asyncio
+            tool = next(t for t in mcp._tool_manager.list_tools() if t.name == "get_my_manga_list")
+            asyncio.run(tool.fn(None, None, 2000, 0, None))
+
+            params = mock_client.get_authed.call_args.kwargs["params"]
+            assert params["limit"] == 1000
+
+    def test_get_my_anime_list_with_status_and_sort(self):
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        with patch("tools.tools.MALClient") as mock_client_cls, patch("tools.tools.get_mal_access_token", new=AsyncMock(return_value="test-token")):
+            mock_client = AsyncMock()
+            mock_client.get_authed = AsyncMock(return_value={"data": []})
+            mock_client_cls.return_value = mock_client
+            register_tools(mcp)
+
+            import asyncio
+            tool = next(t for t in mcp._tool_manager.list_tools() if t.name == "get_my_anime_list")
+            asyncio.run(tool.fn(AnimeStatus.COMPLETED, AnimeStatusSort.ANIME_TITLE, 25, 10, None))
+
+            params = mock_client.get_authed.call_args.kwargs["params"]
+            assert params["status"] == "completed"
+            assert params["sort"] == "anime_title"
+            assert params["limit"] == 25
+            assert params["offset"] == 10
+
+    def test_get_my_manga_list_with_status_and_sort(self):
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        with patch("tools.tools.MALClient") as mock_client_cls, patch("tools.tools.get_mal_access_token", new=AsyncMock(return_value="test-token")):
+            mock_client = AsyncMock()
+            mock_client.get_authed = AsyncMock(return_value={"data": []})
+            mock_client_cls.return_value = mock_client
+            register_tools(mcp)
+
+            import asyncio
+            tool = next(t for t in mcp._tool_manager.list_tools() if t.name == "get_my_manga_list")
+            asyncio.run(tool.fn(MangaStatus.READING, MangaStatusSort.LIST_SCORE, 50, 5, None))
+
+            params = mock_client.get_authed.call_args.kwargs["params"]
+            assert params["status"] == "reading"
+            assert params["sort"] == "list_score"
+            assert params["limit"] == 50
+            assert params["offset"] == 5
+
+    def test_get_my_anime_list_omit_status_sort_when_none(self):
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        with patch("tools.tools.MALClient") as mock_client_cls, patch("tools.tools.get_mal_access_token", new=AsyncMock(return_value="test-token")):
+            mock_client = AsyncMock()
+            mock_client.get_authed = AsyncMock(return_value={"data": []})
+            mock_client_cls.return_value = mock_client
+            register_tools(mcp)
+
+            import asyncio
+            tool = next(t for t in mcp._tool_manager.list_tools() if t.name == "get_my_anime_list")
+            asyncio.run(tool.fn(None, None, 10, 0, None))
+
+            params = mock_client.get_authed.call_args.kwargs["params"]
+            assert "status" not in params
+            assert "sort" not in params
+
+    def test_get_my_manga_list_omit_status_sort_when_none(self):
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        with patch("tools.tools.MALClient") as mock_client_cls, patch("tools.tools.get_mal_access_token", new=AsyncMock(return_value="test-token")):
+            mock_client = AsyncMock()
+            mock_client.get_authed = AsyncMock(return_value={"data": []})
+            mock_client_cls.return_value = mock_client
+            register_tools(mcp)
+
+            import asyncio
+            tool = next(t for t in mcp._tool_manager.list_tools() if t.name == "get_my_manga_list")
+            asyncio.run(tool.fn(None, None, 10, 0, None))
+
+            params = mock_client.get_authed.call_args.kwargs["params"]
+            assert "status" not in params
+            assert "sort" not in params
+
+    def test_get_my_anime_list_with_fields(self):
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        with patch("tools.tools.MALClient") as mock_client_cls, patch("tools.tools.get_mal_access_token", new=AsyncMock(return_value="test-token")):
+            mock_client = AsyncMock()
+            mock_client.get_authed = AsyncMock(return_value={"data": []})
+            mock_client_cls.return_value = mock_client
+            register_tools(mcp)
+
+            import asyncio
+            tool = next(t for t in mcp._tool_manager.list_tools() if t.name == "get_my_anime_list")
+            asyncio.run(tool.fn(None, None, 10, 0, ["id", "title", "mean"]))
+
+            params = mock_client.get_authed.call_args.kwargs["params"]
+            assert "fields" in params
+            assert "mean" in params["fields"]
+
+    def test_get_my_manga_list_with_fields(self):
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        with patch("tools.tools.MALClient") as mock_client_cls, patch("tools.tools.get_mal_access_token", new=AsyncMock(return_value="test-token")):
+            mock_client = AsyncMock()
+            mock_client.get_authed = AsyncMock(return_value={"data": []})
+            mock_client_cls.return_value = mock_client
+            register_tools(mcp)
+
+            import asyncio
+            tool = next(t for t in mcp._tool_manager.list_tools() if t.name == "get_my_manga_list")
+            asyncio.run(tool.fn(None, None, 10, 0, ["id", "title", "mean"]))
+
+            params = mock_client.get_authed.call_args.kwargs["params"]
+            assert "fields" in params
+            assert "mean" in params["fields"]
+
+    def test_get_my_anime_list_fields_not_in_params_when_none(self):
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        with patch("tools.tools.MALClient") as mock_client_cls, patch("tools.tools.get_mal_access_token", new=AsyncMock(return_value="test-token")):
+            mock_client = AsyncMock()
+            mock_client.get_authed = AsyncMock(return_value={"data": []})
+            mock_client_cls.return_value = mock_client
+            register_tools(mcp)
+
+            import asyncio
+            tool = next(t for t in mcp._tool_manager.list_tools() if t.name == "get_my_anime_list")
+            asyncio.run(tool.fn(None, None, 10, 0, None))
+
+            params = mock_client.get_authed.call_args.kwargs["params"]
+            assert "fields" not in params
+
+    def test_get_my_manga_list_fields_not_in_params_when_none(self):
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        with patch("tools.tools.MALClient") as mock_client_cls, patch("tools.tools.get_mal_access_token", new=AsyncMock(return_value="test-token")):
+            mock_client = AsyncMock()
+            mock_client.get_authed = AsyncMock(return_value={"data": []})
+            mock_client_cls.return_value = mock_client
+            register_tools(mcp)
+
+            import asyncio
+            tool = next(t for t in mcp._tool_manager.list_tools() if t.name == "get_my_manga_list")
+            asyncio.run(tool.fn(None, None, 10, 0, None))
+
+            params = mock_client.get_authed.call_args.kwargs["params"]
+            assert "fields" not in params
+
+    def test_get_my_anime_list_missing_token_error(self):
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        with patch("tools.tools.MALClient") as mock_client_cls, patch("tools.tools.get_mal_access_token", new=AsyncMock(return_value=None)):
+            mock_client = AsyncMock()
+            mock_client_cls.return_value = mock_client
+            register_tools(mcp)
+
+            import asyncio
+            tool = next(t for t in mcp._tool_manager.list_tools() if t.name == "get_my_anime_list")
+            result = asyncio.run(tool.fn(None, None, 10, 0, None))
+
+            assert "error" in result
+            mock_client.get_authed.assert_not_called()
+
+    def test_get_my_manga_list_missing_token_error(self):
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        with patch("tools.tools.MALClient") as mock_client_cls, patch("tools.tools.get_mal_access_token", new=AsyncMock(return_value=None)):
+            mock_client = AsyncMock()
+            mock_client_cls.return_value = mock_client
+            register_tools(mcp)
+
+            import asyncio
+            tool = next(t for t in mcp._tool_manager.list_tools() if t.name == "get_my_manga_list")
+            result = asyncio.run(tool.fn(None, None, 10, 0, None))
+
+            assert "error" in result
+            mock_client.get_authed.assert_not_called()
+
+    def test_get_my_anime_list_offset_clamped_to_zero(self):
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        with patch("tools.tools.MALClient") as mock_client_cls, patch("tools.tools.get_mal_access_token", new=AsyncMock(return_value="test-token")):
+            mock_client = AsyncMock()
+            mock_client.get_authed = AsyncMock(return_value={"data": []})
+            mock_client_cls.return_value = mock_client
+            register_tools(mcp)
+
+            import asyncio
+            tool = next(t for t in mcp._tool_manager.list_tools() if t.name == "get_my_anime_list")
+            asyncio.run(tool.fn(None, None, 10, -5, None))
+
+            params = mock_client.get_authed.call_args.kwargs["params"]
+            assert params["offset"] == 0
+
+    def test_get_my_anime_list_limit_clamped_to_one(self):
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        with patch("tools.tools.MALClient") as mock_client_cls, patch("tools.tools.get_mal_access_token", new=AsyncMock(return_value="test-token")):
+            mock_client = AsyncMock()
+            mock_client.get_authed = AsyncMock(return_value={"data": []})
+            mock_client_cls.return_value = mock_client
+            register_tools(mcp)
+
+            import asyncio
+            tool = next(t for t in mcp._tool_manager.list_tools() if t.name == "get_my_anime_list")
+            asyncio.run(tool.fn(None, None, -5, 0, None))
+
+            params = mock_client.get_authed.call_args.kwargs["params"]
+            assert params["limit"] == 1
+
+
+_VALID_RSS = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/">
+  <channel>
+    <title>News - MyAnimeList</title>
+    <item>
+      <title>Article One</title>
+      <link>https://myanimelist.net/news/111?_location=rss</link>
+      <description>First article description.</description>
+      <pubDate>Mon, 01 Jan 2024 12:00:00 -0000</pubDate>
+      <media:thumbnail url="https://example.com/thumb1.jpg"/>
+    </item>
+    <item>
+      <title>Article Two</title>
+      <link>https://myanimelist.net/news/222?_location=rss</link>
+      <description>Second article description.</description>
+      <pubDate>Tue, 02 Jan 2024 12:00:00 -0000</pubDate>
+      <media:thumbnail url="https://example.com/thumb2.jpg"/>
+    </item>
+    <item>
+      <title>Article Three</title>
+      <link>https://myanimelist.net/news/333</link>
+      <description>Third article description.</description>
+      <pubDate>Wed, 03 Jan 2024 12:00:00 -0000</pubDate>
+      <media:thumbnail url="https://example.com/thumb3.jpg"/>
+    </item>
+  </channel>
+</rss>"""
+
+
+class TestParseMalNewsRss:
+    def test_parses_all_articles(self):
+        result = parse_mal_news_rss(_VALID_RSS, 10)
+        assert len(result["articles"]) == 3
+        assert result["articles"][0]["title"] == "Article One"
+        assert result["articles"][0]["url"] == "https://myanimelist.net/news/111"
+        assert result["articles"][0]["description"] == "First article description."
+        assert result["articles"][0]["published"] == "Mon, 01 Jan 2024 12:00:00 -0000"
+        assert result["articles"][0]["thumbnail"] == "https://example.com/thumb1.jpg"
+
+    def test_respects_limit(self):
+        result = parse_mal_news_rss(_VALID_RSS, 1)
+        assert len(result["articles"]) == 1
+        assert result["articles"][0]["title"] == "Article One"
+
+    def test_strips_tracking_query_from_url(self):
+        result = parse_mal_news_rss(_VALID_RSS, 1)
+        assert "?_location=rss" not in result["articles"][0]["url"]
+
+    def test_handles_empty_feed(self):
+        rss = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel><title>News</title></channel></rss>"""
+        result = parse_mal_news_rss(rss, 10)
+        assert result["articles"] == []
+
+    def test_handles_missing_channel(self):
+        rss = '<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"></rss>'
+        result = parse_mal_news_rss(rss, 10)
+        assert "error" in result
+
+    def test_raises_on_malformed_xml(self):
+        with pytest.raises(ParseError):
+            parse_mal_news_rss("not valid xml", 10)
+
+    def test_skips_items_without_title_and_url(self):
+        rss = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel><item><description>No title or link</description></item></channel></rss>"""
+        result = parse_mal_news_rss(rss, 10)
+        assert result["articles"] == []
+
+    def test_item_with_only_title(self):
+        rss = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel><item><title>Title Only</title></item></channel></rss>"""
+        result = parse_mal_news_rss(rss, 10)
+        assert len(result["articles"]) == 1
+        assert result["articles"][0]["title"] == "Title Only"
+        assert result["articles"][0]["url"] is None
+        assert result["articles"][0]["description"] is None
+        assert result["articles"][0]["published"] is None
+        assert result["articles"][0]["thumbnail"] is None
+
+    def test_item_with_missing_thumbnail(self):
+        rss = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel><item><title>T</title><link>https://a.b</link></item></channel></rss>"""
+        result = parse_mal_news_rss(rss, 10)
+        assert result["articles"][0]["thumbnail"] is None
+
+
+class TestGetMalNews:
+    def test_get_mal_news_fetches_rss_url(self):
+        from mcp.server.fastmcp import FastMCP
+
+        rss_response = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel>
+  <title>News</title>
+  <item><title>T</title><link>https://a.b</link><description>D</description><pubDate>Mon, 01 Jan 2024 00:00:00 -0000</pubDate></item>
+</channel></rss>"""
+
+        mcp = FastMCP("test")
+        with patch("tools.tools.MALClient") as mock_client_cls, \
+             patch("tools.tools.httpx.AsyncClient") as mock_async_client_cls:
+            mock_client = AsyncMock()
+            mock_client_cls.return_value = mock_client
+
+            mock_response = AsyncMock()
+            mock_response.raise_for_status = Mock()
+            mock_response.text = rss_response
+            mock_http = AsyncMock()
+            mock_http.__aenter__ = AsyncMock(return_value=mock_http)
+            mock_http.__aexit__ = AsyncMock(return_value=False)
+            mock_http.get = AsyncMock(return_value=mock_response)
+            mock_async_client_cls.return_value = mock_http
+
+            register_tools(mcp)
+
+            import asyncio
+            tool = next(t for t in mcp._tool_manager.list_tools() if t.name == "get_mal_news")
+            result = asyncio.run(tool.fn(5))
+
+            mock_http.get.assert_called_once_with("https://myanimelist.net/rss/news.xml")
+            assert len(result["articles"]) == 1
+
+    def test_get_mal_news_limit_is_clamped(self):
+        from mcp.server.fastmcp import FastMCP
+
+        rss_empty = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel><title>News</title></channel></rss>"""
+
+        mcp = FastMCP("test")
+        with patch("tools.tools.MALClient") as mock_client_cls, \
+             patch("tools.tools.httpx.AsyncClient") as mock_async_client_cls:
+            mock_client = AsyncMock()
+            mock_client_cls.return_value = mock_client
+
+            mock_response = AsyncMock()
+            mock_response.raise_for_status = Mock()
+            mock_response.text = rss_empty
+            mock_http = AsyncMock()
+            mock_http.__aenter__ = AsyncMock(return_value=mock_http)
+            mock_http.__aexit__ = AsyncMock(return_value=False)
+            mock_http.get = AsyncMock(return_value=mock_response)
+            mock_async_client_cls.return_value = mock_http
+
+            register_tools(mcp)
+
+            import asyncio
+            tool = next(t for t in mcp._tool_manager.list_tools() if t.name == "get_mal_news")
+            asyncio.run(tool.fn(100))
+
+            mock_http.get.assert_called_once()
+
+    def test_get_mal_news_http_error(self):
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        with patch("tools.tools.MALClient") as mock_client_cls, \
+             patch("tools.tools.httpx.AsyncClient") as mock_async_client_cls:
+            mock_client = AsyncMock()
+            mock_client_cls.return_value = mock_client
+
+            mock_http = AsyncMock()
+            mock_http.__aenter__ = AsyncMock(return_value=mock_http)
+            mock_http.__aexit__ = AsyncMock(return_value=False)
+            error_response = AsyncMock()
+            error_response.status_code = 503
+            error_response.reason_phrase = "Service Unavailable"
+            import httpx
+            mock_http.get = AsyncMock(side_effect=httpx.HTTPStatusError(
+                "error", request=AsyncMock(), response=error_response
+            ))
+            mock_async_client_cls.return_value = mock_http
+
+            register_tools(mcp)
+
+            import asyncio
+            tool = next(t for t in mcp._tool_manager.list_tools() if t.name == "get_mal_news")
+            result = asyncio.run(tool.fn(10))
+
+            assert "error" in result
+            assert "503" in result["error"]
