@@ -75,7 +75,7 @@ If Hermes is managed via Docker, persist this repository and the token path as m
 - `get_anime_details`: fetch anime details by MAL ID.
 - `get_anime_ranking`: fetch anime rankings.
 - `get_seasonal_anime`: fetch anime by year/season.
-- `get_anime_list`: fetch a user's public anime list.
+- `get_anime_list`: fetch a user's public anime list (status filter optional).
 - `get_suggested_anime`: **auth required**; fetch recommendations for the authenticated user.
 - `update_myanimelist`: **auth required**; update an anime list entry.
 - `delete_myanimelist_item`: **auth required**; delete an anime list entry.
@@ -85,9 +85,15 @@ If Hermes is managed via Docker, persist this repository and the token path as m
 - `get_manga`: search manga.
 - `get_manga_details`: fetch manga details by MAL ID.
 - `get_manga_ranking`: fetch manga rankings.
-- `get_manga_list`: fetch a user's public manga list.
+- `get_manga_list`: fetch a user's public manga list (status filter optional).
 - `update_mymangalist`: **auth required**; update a manga list entry.
 - `delete_mymangalist_item`: **auth required**; delete a manga list entry.
+
+### Forum
+
+- `get_forum_boards`: fetch all MAL forum boards.
+- `get_forum_topic`: fetch a forum topic by ID.
+- `get_forum_topics`: fetch forum topics with optional filters (board_id, subboard_id, search, user).
 
 ### User/auth
 

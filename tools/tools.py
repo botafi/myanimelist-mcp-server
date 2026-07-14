@@ -56,32 +56,36 @@ def register_tools(mcp: FastMCP):
             return api_error_payload(e)
 
     @mcp.tool()
-    async def get_anime_ranking(ranking_type: AnimeRanking = AnimeRanking.ALL, limit: int = 10, offset: int = 0) -> dict:
+    async def get_anime_ranking(ranking_type: AnimeRanking = AnimeRanking.ALL, limit: int = 10, offset: int = 0, fields: Optional[List[str]] = None) -> dict:
         """Fetch anime rankings from MyAnimeList."""
         try:
-            return await client().get_public(
-                f"/anime/ranking/{ranking_type.value}",
-                params={"limit": clamp_limit(limit, 500), "offset": max(0, offset)},
-            )
+            params: dict[str, object] = {"limit": clamp_limit(limit, 500), "offset": max(0, offset)}
+            if fields:
+                params["fields"] = build_fields(fields, ["id", "title", "main_picture"])
+            return await client().get_public(f"/anime/ranking/{ranking_type.value}", params=params)
         except Exception as e:
             return api_error_payload(e)
 
     @mcp.tool()
-    async def get_seasonal_anime(season: Season, year: int, sort: Optional[SeasonSort] = None, limit: int = 10, offset: int = 0) -> dict:
+    async def get_seasonal_anime(season: Season, year: int, sort: Optional[SeasonSort] = None, limit: int = 10, offset: int = 0, fields: Optional[List[str]] = None) -> dict:
         """Fetch seasonal anime from MyAnimeList."""
         try:
             params: dict[str, object] = {"limit": clamp_limit(limit, 500), "offset": max(0, offset)}
             if sort:
                 params["sort"] = sort.value
+            if fields:
+                params["fields"] = build_fields(fields, ["id", "title", "main_picture"])
             return await client().get_public(f"/anime/season/{year}/{season.value}", params=params)
         except Exception as e:
             return api_error_payload(e)
 
     @mcp.tool()
-    async def get_anime_list(username: str, status: AnimeStatus, sort: Optional[AnimeStatusSort] = None, limit: int = 10, offset: int = 0) -> dict:
+    async def get_anime_list(username: str, status: Optional[AnimeStatus] = None, sort: Optional[AnimeStatusSort] = None, limit: int = 10, offset: int = 0) -> dict:
         """Fetch a public MyAnimeList anime list for a user."""
         try:
-            params = {"status": status.value, "limit": clamp_limit(limit, 500), "offset": max(0, offset)}
+            params: dict[str, object] = {"limit": clamp_limit(limit, 1000), "offset": max(0, offset)}
+            if status:
+                params["status"] = status.value
             if sort:
                 params["sort"] = sort.value
             return await client().get_public(f"/users/{username}/animelist", params=params)
@@ -107,24 +111,74 @@ def register_tools(mcp: FastMCP):
             return api_error_payload(e)
 
     @mcp.tool()
-    async def get_manga_ranking(ranking_type: MangaRanking, limit: int = 100, offset: int = 0) -> dict:
+    async def get_manga_ranking(ranking_type: MangaRanking, limit: int = 100, offset: int = 0, fields: Optional[List[str]] = None) -> dict:
         """Fetch manga rankings from MyAnimeList."""
         try:
+            params: dict[str, object] = {"limit": clamp_limit(limit, 500), "offset": max(0, offset)}
+            if fields:
+                params["fields"] = build_fields(fields, ["id", "title", "main_picture"])
+            return await client().get_public(f"/manga/ranking/{ranking_type.value}", params=params)
+        except Exception as e:
+            return api_error_payload(e)
+
+    @mcp.tool()
+    async def get_manga_list(username: str, status: Optional[MangaStatus] = None, sort: Optional[MangaStatusSort] = None, limit: int = 10, offset: int = 0) -> dict:
+        """Fetch a public MyAnimeList manga list for a user."""
+        try:
+            params: dict[str, object] = {"limit": clamp_limit(limit, 1000), "offset": max(0, offset)}
+            if status:
+                params["status"] = status.value
+            if sort:
+                params["sort"] = sort.value
+            return await client().get_public(f"/users/{username}/mangalist", params=params)
+        except Exception as e:
+            return api_error_payload(e)
+
+    # Forum
+    @mcp.tool()
+    async def get_forum_boards() -> dict:
+        """Fetch MyAnimeList forum boards."""
+        try:
+            return await client().get_public("/forum/boards")
+        except Exception as e:
+            return api_error_payload(e)
+
+    @mcp.tool()
+    async def get_forum_topic(topic_id: int, limit: int = 100, offset: int = 0) -> dict:
+        """Fetch a MyAnimeList forum topic by ID."""
+        try:
             return await client().get_public(
-                f"/manga/ranking/{ranking_type.value}",
-                params={"limit": clamp_limit(limit, 500), "offset": max(0, offset)},
+                f"/forum/topic/{topic_id}",
+                params={"limit": clamp_limit(limit, 100), "offset": max(0, offset)},
             )
         except Exception as e:
             return api_error_payload(e)
 
     @mcp.tool()
-    async def get_manga_list(username: str, status: MangaStatus, sort: Optional[MangaStatusSort] = None, limit: int = 10, offset: int = 0) -> dict:
-        """Fetch a public MyAnimeList manga list for a user."""
+    async def get_forum_topics(
+        board_id: Optional[int] = None,
+        subboard_id: Optional[int] = None,
+        limit: int = 100,
+        offset: int = 0,
+        sort: str = "recent",
+        q: Optional[str] = None,
+        topic_user_name: Optional[str] = None,
+        user_name: Optional[str] = None,
+    ) -> dict:
+        """Fetch MyAnimeList forum topics with optional filters."""
         try:
-            params = {"status": status.value, "limit": clamp_limit(limit, 500), "offset": max(0, offset)}
-            if sort:
-                params["sort"] = sort.value
-            return await client().get_public(f"/users/{username}/mangalist", params=params)
+            params: dict[str, object] = {"limit": clamp_limit(limit, 100), "offset": max(0, offset), "sort": sort}
+            if board_id is not None:
+                params["board_id"] = board_id
+            if subboard_id is not None:
+                params["subboard_id"] = subboard_id
+            if q:
+                params["q"] = q
+            if topic_user_name:
+                params["topic_user_name"] = topic_user_name
+            if user_name:
+                params["user_name"] = user_name
+            return await client().get_public("/forum/topics", params=params)
         except Exception as e:
             return api_error_payload(e)
 
@@ -159,9 +213,9 @@ def register_tools(mcp: FastMCP):
 
     @mcp.tool()
     async def get_user_profile(fields: Optional[str] = None) -> dict:
-        """Fetch the authenticated user's MyAnimeList profile."""
+        """Fetch the authenticated user's MyAnimeList profile. Use fields=anime_statistics to get stats."""
         try:
-            params = {"fields": "anime_statistics"} if fields == "anime_statistics" else None
+            params = {"fields": fields} if fields else None
             return await client().get_authed("/users/@me", await token(), params=params)
         except Exception as e:
             return api_error_payload(e)
