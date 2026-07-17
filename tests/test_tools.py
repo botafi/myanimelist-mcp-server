@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, Mock, patch
 from xml.etree.ElementTree import ParseError
 
 from utils.schemas import AnimeRanking, AnimeStatus, AnimeStatusSort, MangaRanking, MangaStatus, MangaStatusSort, Season
+from utils.mal_client import MALAPIError
 from tools.tools import register_tools, normalize_episode_window, anime_calendar_ical_url, parse_mal_news_rss
 
 
@@ -787,3 +788,87 @@ class TestGetMalNews:
 
             assert "error" in result
             assert "503" in result["error"]
+
+
+class TestSeasonalAnimeErrorHandling:
+    def test_get_seasonal_anime_empty_error_from_mal_api(self):
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        with patch("tools.tools.MALClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.get_public = AsyncMock(
+                side_effect=MALAPIError("MAL API returned an empty error", payload={"error": ""})
+            )
+            mock_client_cls.return_value = mock_client
+            register_tools(mcp)
+
+            import asyncio
+            tool = next(t for t in mcp._tool_manager.list_tools() if t.name == "get_seasonal_anime")
+            result = asyncio.run(tool.fn(Season.SUMMER, 2026, None, 10, 0, None))
+
+            assert "error" in result
+            assert result["error"] == "MAL API returned an empty error"
+            assert result["status_code"] == 200
+
+    def test_get_seasonal_anime_mal_api_error_with_message(self):
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        with patch("tools.tools.MALClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.get_public = AsyncMock(
+                side_effect=MALAPIError("MAL API returned an error: invalid season", payload={"error": "invalid season"})
+            )
+            mock_client_cls.return_value = mock_client
+            register_tools(mcp)
+
+            import asyncio
+            tool = next(t for t in mcp._tool_manager.list_tools() if t.name == "get_seasonal_anime")
+            result = asyncio.run(tool.fn(Season.SUMMER, 2026, None, 10, 0, None))
+
+            assert "error" in result
+            assert "invalid season" in result["error"]
+            assert result["status_code"] == 200
+
+    def test_get_seasonal_anime_generic_exception_empty_string(self):
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        with patch("tools.tools.MALClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.get_public = AsyncMock(side_effect=Exception(""))
+            mock_client_cls.return_value = mock_client
+            register_tools(mcp)
+
+            import asyncio
+            tool = next(t for t in mcp._tool_manager.list_tools() if t.name == "get_seasonal_anime")
+            result = asyncio.run(tool.fn(Season.SUMMER, 2026, None, 10, 0, None))
+
+            assert "error" in result
+            assert result["error"] == "Exception"
+
+    def test_get_seasonal_anime_http_error_converted_to_payload(self):
+        from mcp.server.fastmcp import FastMCP
+        import httpx
+
+        mcp = FastMCP("test")
+        with patch("tools.tools.MALClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            req = Mock()
+            resp = Mock()
+            resp.status_code = 503
+            resp.reason_phrase = "Service Unavailable"
+            mock_client.get_public = AsyncMock(
+                side_effect=httpx.HTTPStatusError("error", request=req, response=resp)
+            )
+            mock_client_cls.return_value = mock_client
+            register_tools(mcp)
+
+            import asyncio
+            tool = next(t for t in mcp._tool_manager.list_tools() if t.name == "get_seasonal_anime")
+            result = asyncio.run(tool.fn(Season.SUMMER, 2026, None, 10, 0, None))
+
+            assert "error" in result
+            assert "503" in result["error"]
+            assert result["status_code"] == 503

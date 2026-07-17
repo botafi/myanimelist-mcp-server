@@ -11,6 +11,14 @@ import httpx
 
 MAL_API_URL = "https://api.myanimelist.net/v2"
 
+
+class MALAPIError(Exception):
+    """Raised when the MAL API returns an error payload with HTTP 200."""
+
+    def __init__(self, message: str, payload: dict[str, Any] | None = None):
+        super().__init__(message)
+        self.payload = payload or {}
+
 _SECRET_PATTERNS = [
     (re.compile(r"Bearer\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE), "Bearer <redacted>"),
     (re.compile(r"token=([^\s&]+)", re.IGNORECASE), "token=<redacted>"),
@@ -109,7 +117,14 @@ class MALClient:
             response.raise_for_status()
             if response.status_code == 204 or not response.content:
                 return {"ok": True}
-            return response.json()
+            body = response.json()
+            if isinstance(body, dict) and "error" in body:
+                err_msg = body.get("error") or body.get("message") or ""
+                raise MALAPIError(
+                    f"MAL API returned an error: {err_msg}".strip() if err_msg else "MAL API returned an empty error",
+                    payload=body,
+                )
+            return body
 
     async def get_public(self, endpoint: str, *, params: dict[str, Any] | None = None) -> dict[str, Any]:
         return await self.request("GET", endpoint, params=params)
@@ -125,6 +140,10 @@ class MALClient:
 
 
 def api_error_payload(error: Exception) -> dict[str, Any]:
+    if isinstance(error, MALAPIError):
+        detail = safe_error(str(error))
+        return {"error": detail or type(error).__name__, "status_code": 200}
     if isinstance(error, httpx.HTTPStatusError):
         return {"error": safe_error(f"MAL API error: {error.response.status_code} {error.response.reason_phrase}"), "status_code": error.response.status_code}
-    return {"error": safe_error(str(error))}
+    detail = safe_error(str(error))
+    return {"error": detail or type(error).__name__}
