@@ -192,10 +192,48 @@ async def _refresh_tokens(refresh_token: str) -> StoredTokens:
     return tokens
 
 
-def get_auth_status() -> dict[str, Any]:
-    """Return non-sensitive auth status information."""
+_REFRESH_LOCK = asyncio.Lock()
+
+
+async def get_auth_status() -> dict[str, Any]:
+    """Return non-sensitive auth status information, attempting a silent refresh if needed.
+
+    When the access token is expired or near-expiry but a refresh token is available,
+    this will attempt a silent token refresh. It never initiates interactive login.
+    """
     store = _token_store()
     tokens = store.load()
+
+    if tokens is not None and tokens.is_valid:
+        return {
+            "authenticated": True,
+            "provider": "myanimelist",
+            "expires_at": tokens.expires_at,
+            "token_path": str(store.path),
+        }
+
+    if tokens is not None and tokens.refresh_token:
+        async with _REFRESH_LOCK:
+            tokens = store.load()
+            if tokens is not None and tokens.is_valid:
+                return {
+                    "authenticated": True,
+                    "provider": "myanimelist",
+                    "expires_at": tokens.expires_at,
+                    "token_path": str(store.path),
+                }
+            if tokens is not None and tokens.refresh_token:
+                try:
+                    refreshed = await _refresh_tokens(tokens.refresh_token)
+                    return {
+                        "authenticated": True,
+                        "provider": "myanimelist",
+                        "expires_at": refreshed.expires_at,
+                        "token_path": str(store.path),
+                    }
+                except Exception as exc:
+                    LOGGER.warning("Silent refresh failed during auth status check: %s", exc)
+
     if tokens is None:
         return {
             "authenticated": False,
@@ -203,10 +241,11 @@ def get_auth_status() -> dict[str, Any]:
             "reason": "no_stored_tokens",
             "token_path": str(store.path),
         }
+
     return {
-        "authenticated": tokens.is_valid,
+        "authenticated": False,
         "provider": "myanimelist",
-        "expires_at": tokens.expires_at,
+        "reason": "token_expired",
         "token_path": str(store.path),
     }
 
@@ -231,11 +270,16 @@ async def get_mal_access_token() -> str:
         return tokens.access_token
 
     if tokens is not None and tokens.refresh_token:
-        try:
-            refreshed = await _refresh_tokens(tokens.refresh_token)
-            return refreshed.access_token
-        except Exception as exc:
-            LOGGER.warning("Failed to refresh MAL token: %s", exc)
+        async with _REFRESH_LOCK:
+            tokens = store.load()
+            if tokens is not None and tokens.is_valid:
+                return tokens.access_token
+            if tokens is not None and tokens.refresh_token:
+                try:
+                    refreshed = await _refresh_tokens(tokens.refresh_token)
+                    return refreshed.access_token
+                except Exception as exc:
+                    LOGGER.warning("Failed to refresh MAL token: %s", exc)
 
     raise RuntimeError(
         "No valid MyAnimeList access token available. "

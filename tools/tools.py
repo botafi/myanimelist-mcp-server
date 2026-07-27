@@ -11,7 +11,7 @@ from mcp.server.fastmcp import FastMCP
 from pydantic import Field, ValidationError
 
 from utils.auth import get_auth_status, get_mal_access_token, login_initiate, login_status, revoke_auth
-from utils.episodes import upcoming_events_digest
+from utils.episodes import build_watch_queue, parse_anime_calendar_events, upcoming_events_digest
 from utils.mal_client import MALClient, api_error_payload, build_fields, clamp_limit
 from utils.schemas import *
 
@@ -267,7 +267,7 @@ def register_tools(mcp: FastMCP):
     @mcp.tool()
     async def mal_auth_status() -> dict:
         """Check whether this MCP has stored MyAnimeList OAuth tokens."""
-        return get_auth_status()
+        return await get_auth_status()
 
     @mcp.tool()
     async def mal_auth_revoke() -> dict:
@@ -401,6 +401,29 @@ def register_tools(mcp: FastMCP):
                 response = await calendar_client.get(url)
                 response.raise_for_status()
             return {"username": username, "hours": hours, "digest": upcoming_events_digest(response.text, hours=hours)}
+        except Exception as e:
+            return api_error_payload(e)
+
+    @mcp.tool()
+    async def get_watch_queue(username: str = "botafi") -> dict:
+        """Build a watch queue digest from the authenticated user's 'watching' anime list and Anime Calendar iCal data.
+
+        Returns per-anime watched episode counts against latest released episodes (from calendar or total episode metadata)
+        plus aggregate totals. Latest released is unknown for titles that are neither finished nor found in the calendar feed."""
+        try:
+            access_token = await token()
+            list_fields = "list_status{num_episodes_watched},anime{id,title,num_episodes,status}"
+            list_params = {"status": "watching", "limit": 1000, "offset": 0, "fields": list_fields}
+            list_response = await client().get_authed("/users/@me/animelist", access_token, params=list_params)
+
+            url = anime_calendar_ical_url(username)
+            async with httpx.AsyncClient(timeout=30) as calendar_client:
+                cal_response = await calendar_client.get(url)
+                cal_response.raise_for_status()
+            calendar_events = parse_anime_calendar_events(cal_response.text)
+
+            raw_data = list_response.get("data", []) if isinstance(list_response, dict) else []
+            return build_watch_queue(raw_data, calendar_events)
         except Exception as e:
             return api_error_payload(e)
 

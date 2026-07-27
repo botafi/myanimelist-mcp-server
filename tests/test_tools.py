@@ -44,8 +44,9 @@ class TestToolRegistration:
         assert "update_myanimelist" in names
         assert "update_mymangalist" in names
         assert "get_upcoming_anime_episodes" in names
+        assert "get_watch_queue" in names
         assert "get_mal_news" in names
-        assert len(names) == 26
+        assert len(names) == 27
 
     def test_get_anime_list_status_is_optional_in_schema(self):
         from mcp.server.fastmcp import FastMCP
@@ -872,3 +873,160 @@ class TestSeasonalAnimeErrorHandling:
             assert "error" in result
             assert "503" in result["error"]
             assert result["status_code"] == 503
+
+
+class TestGetWatchQueue:
+    def test_get_watch_queue_auth_required(self):
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        with patch("tools.tools.MALClient") as mock_client_cls, \
+             patch("tools.tools.get_mal_access_token", new=AsyncMock(return_value="test-token")), \
+             patch("tools.tools.httpx.AsyncClient") as mock_async_client_cls:
+
+            mock_client = AsyncMock()
+            mock_client.get_authed = AsyncMock(return_value={"data": []})
+            mock_client_cls.return_value = mock_client
+
+            cal_text = "BEGIN:VCALENDAR\nEND:VCALENDAR\n"
+            mock_response = AsyncMock()
+            mock_response.raise_for_status = Mock()
+            mock_response.text = cal_text
+            mock_http = AsyncMock()
+            mock_http.__aenter__ = AsyncMock(return_value=mock_http)
+            mock_http.__aexit__ = AsyncMock(return_value=False)
+            mock_http.get = AsyncMock(return_value=mock_response)
+            mock_async_client_cls.return_value = mock_http
+
+            register_tools(mcp)
+
+            import asyncio
+            tool = next(t for t in mcp._tool_manager.list_tools() if t.name == "get_watch_queue")
+            asyncio.run(tool.fn("testuser"))
+
+            mock_client.get_authed.assert_called_once()
+            assert mock_client.get_authed.call_args.args[0] == "/users/@me/animelist"
+            assert mock_client.get_authed.call_args.args[1] == "test-token"
+            cal_params = mock_client.get_authed.call_args.kwargs["params"]
+            assert cal_params["status"] == "watching"
+            assert cal_params["fields"] == "list_status{num_episodes_watched},anime{id,title,num_episodes,status}"
+
+    def test_get_watch_queue_missing_token_error(self):
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        with patch("tools.tools.MALClient") as mock_client_cls, \
+             patch("tools.tools.get_mal_access_token", new=AsyncMock(return_value=None)):
+            mock_client = AsyncMock()
+            mock_client_cls.return_value = mock_client
+            register_tools(mcp)
+
+            import asyncio
+            tool = next(t for t in mcp._tool_manager.list_tools() if t.name == "get_watch_queue")
+            result = asyncio.run(tool.fn())
+
+            assert "error" in result
+            mock_client.get_authed.assert_not_called()
+
+    def test_get_watch_queue_fetches_calendar_url(self):
+        from mcp.server.fastmcp import FastMCP
+        from urllib.parse import quote
+
+        mcp = FastMCP("test")
+        with patch("tools.tools.MALClient") as mock_client_cls, \
+             patch("tools.tools.get_mal_access_token", new=AsyncMock(return_value="test-token")), \
+             patch("tools.tools.httpx.AsyncClient") as mock_async_client_cls:
+
+            mock_client = AsyncMock()
+            mock_client.get_authed = AsyncMock(return_value={"data": []})
+            mock_client_cls.return_value = mock_client
+
+            cal_text = "BEGIN:VCALENDAR\nEND:VCALENDAR\n"
+            mock_response = AsyncMock()
+            mock_response.raise_for_status = Mock()
+            mock_response.text = cal_text
+            mock_http = AsyncMock()
+            mock_http.__aenter__ = AsyncMock(return_value=mock_http)
+            mock_http.__aexit__ = AsyncMock(return_value=False)
+            mock_http.get = AsyncMock(return_value=mock_response)
+            mock_async_client_cls.return_value = mock_http
+
+            register_tools(mcp)
+
+            import asyncio
+            tool = next(t for t in mcp._tool_manager.list_tools() if t.name == "get_watch_queue")
+            asyncio.run(tool.fn("test user"))
+
+            expected = f"https://api.anime-calendar.com/v3/ical/myanimelist/{quote('test user', safe='')}"
+            mock_http.get.assert_called_once_with(expected)
+
+    def test_get_watch_queue_calendar_error_returns_safe_payload(self):
+        from mcp.server.fastmcp import FastMCP
+        import httpx as httpx_lib
+
+        mcp = FastMCP("test")
+        with patch("tools.tools.MALClient") as mock_client_cls, \
+             patch("tools.tools.get_mal_access_token", new=AsyncMock(return_value="test-token")), \
+             patch("tools.tools.httpx.AsyncClient") as mock_async_client_cls:
+
+            mock_client = AsyncMock()
+            mock_client.get_authed = AsyncMock(return_value={"data": []})
+            mock_client_cls.return_value = mock_client
+
+            mock_http = AsyncMock()
+            mock_http.__aenter__ = AsyncMock(return_value=mock_http)
+            mock_http.__aexit__ = AsyncMock(return_value=False)
+            error_response = AsyncMock()
+            error_response.status_code = 503
+            error_response.reason_phrase = "Service Unavailable"
+            mock_http.get = AsyncMock(side_effect=httpx_lib.HTTPStatusError(
+                "error", request=AsyncMock(), response=error_response
+            ))
+            mock_async_client_cls.return_value = mock_http
+
+            register_tools(mcp)
+
+            import asyncio
+            tool = next(t for t in mcp._tool_manager.list_tools() if t.name == "get_watch_queue")
+            result = asyncio.run(tool.fn())
+
+            assert "error" in result
+            assert "503" in result["error"]
+
+    def test_get_watch_queue_with_data_returns_structured_result(self):
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        with patch("tools.tools.MALClient") as mock_client_cls, \
+             patch("tools.tools.get_mal_access_token", new=AsyncMock(return_value="test-token")), \
+             patch("tools.tools.httpx.AsyncClient") as mock_async_client_cls:
+
+            mock_client = AsyncMock()
+            mock_client.get_authed = AsyncMock(return_value={
+                "data": [
+                    {"node": {"id": 1, "title": "Show A", "num_episodes": 12, "status": "finished_airing"},
+                     "list_status": {"num_episodes_watched": 5}},
+                ]
+            })
+            mock_client_cls.return_value = mock_client
+
+            cal_text = "BEGIN:VCALENDAR\nEND:VCALENDAR\n"
+            mock_response = AsyncMock()
+            mock_response.raise_for_status = Mock()
+            mock_response.text = cal_text
+            mock_http = AsyncMock()
+            mock_http.__aenter__ = AsyncMock(return_value=mock_http)
+            mock_http.__aexit__ = AsyncMock(return_value=False)
+            mock_http.get = AsyncMock(return_value=mock_response)
+            mock_async_client_cls.return_value = mock_http
+
+            register_tools(mcp)
+
+            import asyncio
+            tool = next(t for t in mcp._tool_manager.list_tools() if t.name == "get_watch_queue")
+            result = asyncio.run(tool.fn("testuser"))
+
+            assert "entries" in result
+            assert "aggregate" in result
+            assert len(result["entries"]) == 1
+            assert result["aggregate"]["total_watching"] == 1

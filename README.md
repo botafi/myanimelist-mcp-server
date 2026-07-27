@@ -10,6 +10,7 @@ MCP server for interacting with the MyAnimeList API from Hermes, Claude Desktop,
 - Small MyAnimeList API client wrapper with request timeout and basic request pacing.
 - Auth helper tools: `mal_auth_login`, `mal_auth_login_status`, `mal_auth_status`, `mal_auth_revoke`.
 - Episode schedule helper: `get_upcoming_anime_episodes`, backed by `https://api.anime-calendar.com/v3/ical/myanimelist/<username>`.
+- Watch queue helper: `get_watch_queue`, combines authenticated `watching` list with Anime Calendar iCal data to show per-anime watched vs latest released counts.
 - News RSS helper: `get_mal_news`, backed by `https://myanimelist.net/rss/news.xml`.
 - Tests for token storage, API helper behavior, iCal episode parsing, and RSS news parsing.
 
@@ -106,9 +107,10 @@ If Hermes is managed via Docker, persist this repository and the token path as m
 - `mal_auth_status`: inspect local OAuth token status without exposing token values.
 - `mal_auth_revoke`: delete locally stored OAuth tokens.
 
-### Episode schedule
+### Episode schedule / watch queue
 
 - `get_upcoming_anime_episodes`: fetch upcoming episodes for a MAL username from Anime Calendar iCal and return a digest.
+- `get_watch_queue`: **auth required**; combines the authenticated user's `watching` anime list with Anime Calendar iCal data to return per-title watched episodes versus latest released episodes, plus aggregate counts. Latest released is determined from calendar events (highest past episode or next upcoming minus one) and falls back to `num_episodes` for finished shows. Unknown when neither source is available.
 
 ### News
 
