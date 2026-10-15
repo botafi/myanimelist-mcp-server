@@ -170,7 +170,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "httpx", specifier = ">=0.28.1" },
-    { name = "mcp", extras = ["cli"], specifier = ">=1.9.2" },
+    { name = "mcp", extras = ["cli"], specifier = ">=1.9.2,<2" },
     { name = "python-dotenv", specifier = ">=1.1.0" },
 ]
 
