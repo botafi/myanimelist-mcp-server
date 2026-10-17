@@ -9,8 +9,8 @@ COPY pyproject.toml main.py uv.lock README.md LICENSE /app/
 COPY tools /app/tools
 COPY utils /app/utils
 
-# Install dependencies
-RUN pip install --no-cache-dir .
+# Install exactly the versions in uv.lock
+RUN pip install --no-cache-dir uv && uv sync --frozen --no-dev --no-install-project
 
 # Default command for stdio transport
-CMD ["python", "main.py"]
+CMD ["/app/.venv/bin/python", "main.py"]
