@@ -101,7 +101,7 @@ def register_tools(mcp: FastMCP):
     async def get_anime_details(anime_id: int, fields: Optional[List[str]] = None) -> dict:
         """Fetch anime details by MAL ID."""
         try:
-            fields_param = build_fields(fields, ["id", "title", "main_picture"])
+            fields_param = build_fields(fields, ["id", "title", "main_picture", "nsfw"])
             return await client().get_public(f"/anime/{anime_id}", params={"fields": fields_param})
         except Exception as e:
             return api_error_payload(e)
@@ -112,7 +112,7 @@ def register_tools(mcp: FastMCP):
         try:
             params: dict[str, object] = {"limit": clamp_limit(limit, 500), "offset": max(0, offset)}
             if fields:
-                params["fields"] = build_fields(fields, ["id", "title", "main_picture"])
+                params["fields"] = build_fields(fields, ["id", "title", "main_picture", "nsfw"])
             return await client().get_public(f"/anime/ranking/{ranking_type.value}", params=params)
         except Exception as e:
             return api_error_payload(e)
@@ -125,13 +125,13 @@ def register_tools(mcp: FastMCP):
             if sort:
                 params["sort"] = sort.value
             if fields:
-                params["fields"] = build_fields(fields, ["id", "title", "main_picture"])
+                params["fields"] = build_fields(fields, ["id", "title", "main_picture", "nsfw"])
             return await client().get_public(f"/anime/season/{year}/{season.value}", params=params)
         except Exception as e:
             return api_error_payload(e)
 
     @mcp.tool()
-    async def get_anime_list(username: str, status: Optional[AnimeStatus] = None, sort: Optional[AnimeStatusSort] = None, limit: int = 10, offset: int = 0) -> dict:
+    async def get_anime_list(username: str, status: Optional[AnimeStatus] = None, sort: Optional[AnimeStatusSort] = None, limit: int = 10, offset: int = 0, nsfw : bool = False) -> dict:
         """Fetch a public MyAnimeList anime list for a user."""
         try:
             params: dict[str, object] = {"limit": clamp_limit(limit, 1000), "offset": max(0, offset)}
@@ -139,6 +139,8 @@ def register_tools(mcp: FastMCP):
                 params["status"] = status.value
             if sort:
                 params["sort"] = sort.value
+            if nsfw:
+                params["nsfw"] = "true"
             return await client().get_public(f"/users/{username}/animelist", params=params)
         except Exception as e:
             return api_error_payload(e)
@@ -156,7 +158,7 @@ def register_tools(mcp: FastMCP):
     async def get_manga_details(manga_id: int, fields: Optional[List[str]] = None) -> dict:
         """Fetch manga details by MAL ID."""
         try:
-            fields_param = build_fields(fields, ["id", "title", "main_picture"])
+            fields_param = build_fields(fields, ["id", "title", "main_picture", "nsfw"])
             return await client().get_public(f"/manga/{manga_id}", params={"fields": fields_param})
         except Exception as e:
             return api_error_payload(e)
@@ -167,13 +169,13 @@ def register_tools(mcp: FastMCP):
         try:
             params: dict[str, object] = {"limit": clamp_limit(limit, 500), "offset": max(0, offset)}
             if fields:
-                params["fields"] = build_fields(fields, ["id", "title", "main_picture"])
+                params["fields"] = build_fields(fields, ["id", "title", "main_picture", "nsfw"])
             return await client().get_public(f"/manga/ranking/{ranking_type.value}", params=params)
         except Exception as e:
             return api_error_payload(e)
 
     @mcp.tool()
-    async def get_manga_list(username: str, status: Optional[MangaStatus] = None, sort: Optional[MangaStatusSort] = None, limit: int = 10, offset: int = 0) -> dict:
+    async def get_manga_list(username: str, status: Optional[MangaStatus] = None, sort: Optional[MangaStatusSort] = None, limit: int = 10, offset: int = 0, nsfw : bool = False) -> dict:
         """Fetch a public MyAnimeList manga list for a user."""
         try:
             params: dict[str, object] = {"limit": clamp_limit(limit, 1000), "offset": max(0, offset)}
@@ -181,12 +183,14 @@ def register_tools(mcp: FastMCP):
                 params["status"] = status.value
             if sort:
                 params["sort"] = sort.value
+            if nsfw:
+                params["nsfw"] = "true"
             return await client().get_public(f"/users/{username}/mangalist", params=params)
         except Exception as e:
             return api_error_payload(e)
 
     @mcp.tool()
-    async def get_my_anime_list(status: Optional[AnimeStatus] = None, sort: Optional[AnimeStatusSort] = None, limit: int = 10, offset: int = 0, fields: Optional[List[str]] = None) -> dict:
+    async def get_my_anime_list(status: Optional[AnimeStatus] = None, sort: Optional[AnimeStatusSort] = None, limit: int = 10, offset: int = 0, fields: Optional[List[str]] = None, nsfw : bool = False) -> dict:
         """Fetch the authenticated user's MyAnimeList anime list."""
         try:
             params: dict[str, object] = {"limit": clamp_limit(limit, 1000), "offset": max(0, offset)}
@@ -195,13 +199,15 @@ def register_tools(mcp: FastMCP):
             if sort:
                 params["sort"] = sort.value
             if fields:
-                params["fields"] = build_fields(fields, ["id", "title", "main_picture"])
+                params["fields"] = build_fields(fields, ["id", "title", "main_picture", "nsfw"])
+            if nsfw:
+                params["nsfw"] = "true"
             return await client().get_authed("/users/@me/animelist", await token(), params=params)
         except Exception as e:
             return api_error_payload(e)
 
     @mcp.tool()
-    async def get_my_manga_list(status: Optional[MangaStatus] = None, sort: Optional[MangaStatusSort] = None, limit: int = 10, offset: int = 0, fields: Optional[List[str]] = None) -> dict:
+    async def get_my_manga_list(status: Optional[MangaStatus] = None, sort: Optional[MangaStatusSort] = None, limit: int = 10, offset: int = 0, fields: Optional[List[str]] = None, nsfw : bool = False) -> dict:
         """Fetch the authenticated user's MyAnimeList manga list."""
         try:
             params: dict[str, object] = {"limit": clamp_limit(limit, 1000), "offset": max(0, offset)}
@@ -210,7 +216,9 @@ def register_tools(mcp: FastMCP):
             if sort:
                 params["sort"] = sort.value
             if fields:
-                params["fields"] = build_fields(fields, ["id", "title", "main_picture"])
+                params["fields"] = build_fields(fields, ["id", "title", "main_picture", "nsfw"])
+            if nsfw:
+                params["nsfw"] = "true"
             return await client().get_authed("/users/@me/mangalist", await token(), params=params)
         except Exception as e:
             return api_error_payload(e)
